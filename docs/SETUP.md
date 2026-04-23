@@ -9,7 +9,7 @@ This walkthrough assumes a brand-new Databricks workspace and no prior setup. Ta
   ```bash
   databricks auth login --host https://<your-workspace>.cloud.databricks.com
   ```
-- **Python 3.11+** locally, only used for generating the synthetic sample data.
+- **No local Python** required. The sample data is generated inside the workspace as part of the pipeline. If you want a local preview, `pip install reportlab` and run `python -m src.sample_data.generate_data --out ./sample_data`.
 - **Permissions.** You'll need the ability to:
   - Create a catalog (or use an existing one — override `catalog` in `databricks.yml`)
   - Create serving endpoints and Vector Search endpoints
@@ -17,19 +17,14 @@ This walkthrough assumes a brand-new Databricks workspace and no prior setup. Ta
 
 If you can't create a catalog, ask your workspace admin to grant you `CREATE SCHEMA`, `CREATE VOLUME`, and `USE CATALOG` on an existing catalog, then set `catalog` to that catalog's name.
 
-## 2. Generate sample data locally
+## 2. Clone the repo
 
 ```bash
 git clone https://github.com/dgtriplett/utility-knowledge-lakehouse.git
 cd utility-knowledge-lakehouse
-
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-python -m src.sample_data.generate_data --out ./sample_data
 ```
 
-You should end up with `./sample_data/{onelines,studies,debriefs}/` populated with synthetic PDFs and transcripts, plus `manifest.json`.
+No local Python setup needed. The pipeline's `upload_samples` step generates the synthetic corpus inside the workspace.
 
 ## 3. Deploy the bundle
 

@@ -24,8 +24,6 @@ import string
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import click
-from faker import Faker
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
@@ -39,6 +37,14 @@ SUBSTATION_PREFIXES = [
     "Oak Ridge", "Pine Hollow", "Beaver Creek", "Silver Falls", "Red Butte",
     "Mill Creek", "Cedar Grove", "Granite Pass", "Blackwater", "North Fork",
     "East Meadow", "Sunridge", "Ironwood", "Whitestone", "Copper Gulch",
+]
+
+# Hardcoded to avoid a faker dependency — any ~20 names will do.
+LAST_NAMES = [
+    "Acevedo", "Benson", "Chen", "Delgado", "Ellis", "Fitzgerald", "Gupta",
+    "Hoffman", "Ibrahim", "Jensen", "Kowalski", "Lindqvist", "Mendoza",
+    "Nakamura", "Okonkwo", "Petrov", "Quintero", "Ramirez", "Suzuki",
+    "Thompson", "Umar", "Vargas", "Whitfield", "Yamamoto", "Zhao",
 ]
 
 
@@ -64,13 +70,13 @@ def _rng(seed_extra: str = "") -> random.Random:
     return random.Random(f"{SEED}-{seed_extra}")
 
 
-def _engineer_name(rng: random.Random, faker: Faker) -> str:
-    last = faker.last_name()
+def _engineer_name(rng: random.Random) -> str:
+    last = rng.choice(LAST_NAMES)
     first_initial = rng.choice(string.ascii_uppercase)
     return f"{first_initial}. {last}, P.E."
 
 
-def _substations(n: int, faker: Faker) -> list[Substation]:
+def _substations(n: int) -> list[Substation]:
     rng = _rng("substations")
     out = []
     for i in range(n):
@@ -106,7 +112,7 @@ def _breakers_for(sub: Substation) -> list[Breaker]:
     return out
 
 
-def _write_oneline(sub: Substation, breakers: list[Breaker], out_path: Path, faker: Faker) -> None:
+def _write_oneline(sub: Substation, breakers: list[Breaker], out_path: Path) -> None:
     rng = _rng(f"oneline-{sub.name}")
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(str(out_path), pagesize=LETTER, title=f"{sub.name} One-Line Summary")
@@ -163,7 +169,7 @@ def _write_oneline(sub: Substation, breakers: list[Breaker], out_path: Path, fak
     flow.append(Spacer(1, 18))
     flow.append(
         Paragraph(
-            f"Approved: {_engineer_name(rng, faker)} &nbsp;&nbsp; Date: "
+            f"Approved: {_engineer_name(rng)} &nbsp;&nbsp; Date: "
             f"{rng.randint(1, 28)}/{rng.randint(1, 12)}/{rng.randint(2019, 2025)}",
             styles["Normal"],
         )
@@ -171,7 +177,7 @@ def _write_oneline(sub: Substation, breakers: list[Breaker], out_path: Path, fak
     doc.build(flow)
 
 
-def _write_study(sub: Substation, breakers: list[Breaker], out_path: Path, faker: Faker) -> None:
+def _write_study(sub: Substation, breakers: list[Breaker], out_path: Path) -> None:
     rng = _rng(f"study-{sub.name}")
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(str(out_path), pagesize=LETTER, title=f"{sub.name} Protection Study")
@@ -182,7 +188,7 @@ def _write_study(sub: Substation, breakers: list[Breaker], out_path: Path, faker
     flow.append(
         Paragraph(
             f"Study date: {rng.randint(1, 28)}/{rng.randint(1, 12)}/{rng.randint(2015, 2025)}<br/>"
-            f"Prepared by: {_engineer_name(rng, faker)}<br/>"
+            f"Prepared by: {_engineer_name(rng)}<br/>"
             f"Scope: {sub.voltage_class_kv:.0f} kV protection settings for all feeder breakers, "
             f"including overcurrent, reclosing, and backup distance elements.",
             styles["Normal"],
@@ -238,7 +244,7 @@ def _write_study(sub: Substation, breakers: list[Breaker], out_path: Path, faker
     flow.append(Spacer(1, 18))
     flow.append(
         Paragraph(
-            f"Approved: {_engineer_name(rng, faker)} &nbsp;&nbsp; Date: "
+            f"Approved: {_engineer_name(rng)} &nbsp;&nbsp; Date: "
             f"{rng.randint(1, 28)}/{rng.randint(1, 12)}/{rng.randint(2020, 2025)}",
             styles["Normal"],
         )
@@ -323,21 +329,18 @@ def _write_debrief(sub: Substation, eq: str, template_key: str, template: str, o
     return content
 
 
-@click.command()
-@click.option("--out", "out_dir", default="./sample_data", help="Output directory")
-@click.option("--n-substations", default=15, help="How many substations to generate")
-@click.option("--n-debriefs", default=20, help="How many SME debrief transcripts to generate")
-def main(out_dir: str, n_substations: int, n_debriefs: int) -> None:
-    """Generate the full synthetic corpus into --out."""
+def generate(out_dir: str | Path, n_substations: int = 15, n_debriefs: int = 20) -> dict:
+    """Generate the full synthetic corpus into out_dir.
+
+    Importable from a notebook as well as callable from the CLI. Returns a
+    summary dict with counts and the manifest path.
+    """
     out = Path(out_dir).resolve()
     (out / "onelines").mkdir(parents=True, exist_ok=True)
     (out / "studies").mkdir(parents=True, exist_ok=True)
     (out / "debriefs").mkdir(parents=True, exist_ok=True)
 
-    faker = Faker()
-    Faker.seed(SEED)
-
-    subs = _substations(n_substations, faker)
+    subs = _substations(n_substations)
     all_breakers: list[Breaker] = []
     manifest: list[dict] = []
 
@@ -348,11 +351,11 @@ def main(out_dir: str, n_substations: int, n_debriefs: int) -> None:
         safe = sub.name.replace(" ", "_").lower()
 
         oneline_path = out / "onelines" / f"{safe}_oneline.pdf"
-        _write_oneline(sub, breakers, oneline_path, faker)
+        _write_oneline(sub, breakers, oneline_path)
         manifest.append({"path": str(oneline_path), "type": "oneline", "substation": sub.name})
 
         study_path = out / "studies" / f"{safe}_protection_study.pdf"
-        _write_study(sub, breakers, study_path, faker)
+        _write_study(sub, breakers, study_path)
         manifest.append({"path": str(study_path), "type": "protection_study", "substation": sub.name})
 
     rng = _rng("debriefs")
@@ -369,12 +372,34 @@ def main(out_dir: str, n_substations: int, n_debriefs: int) -> None:
     manifest_path = out / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    click.echo(f"Generated {len(subs)} substations, {len(all_breakers)} breakers.")
-    click.echo(f"Wrote {len([m for m in manifest if m['type'] == 'oneline'])} one-line PDFs, "
-               f"{len([m for m in manifest if m['type'] == 'protection_study'])} protection studies, "
-               f"{len([m for m in manifest if m['type'] == 'debrief'])} debrief transcripts.")
-    click.echo(f"Manifest: {manifest_path}")
+    return {
+        "n_substations": len(subs),
+        "n_breakers": len(all_breakers),
+        "n_onelines": len([m for m in manifest if m["type"] == "oneline"]),
+        "n_studies": len([m for m in manifest if m["type"] == "protection_study"]),
+        "n_debriefs": len([m for m in manifest if m["type"] == "debrief"]),
+        "manifest_path": str(manifest_path),
+    }
+
+
+def _cli() -> None:
+    parser = argparse.ArgumentParser(description="Generate synthetic utility documents.")
+    parser.add_argument("--out", dest="out_dir", default="./sample_data", help="Output directory")
+    parser.add_argument("--n-substations", type=int, default=15)
+    parser.add_argument("--n-debriefs", type=int, default=20)
+    args = parser.parse_args()
+
+    summary = generate(args.out_dir, args.n_substations, args.n_debriefs)
+    print(
+        f"Generated {summary['n_substations']} substations, {summary['n_breakers']} breakers."
+    )
+    print(
+        f"Wrote {summary['n_onelines']} one-line PDFs, "
+        f"{summary['n_studies']} protection studies, "
+        f"{summary['n_debriefs']} debrief transcripts."
+    )
+    print(f"Manifest: {summary['manifest_path']}")
 
 
 if __name__ == "__main__":
-    main()
+    _cli()

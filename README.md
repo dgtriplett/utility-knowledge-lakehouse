@@ -22,8 +22,8 @@ The system takes the four-layer framework — **digitize the analog, consolidate
 - A Databricks workspace on AWS, Azure, or GCP with Unity Catalog enabled
 - Serverless compute enabled (for AI functions)
 - Permission to create catalogs, or an existing catalog you can use
-- [Databricks CLI](https://docs.databricks.com/en/dev-tools/cli/install.html) v0.230+ configured (`databricks configure`)
-- Python 3.11+ locally (only needed for data generation; everything else runs in the workspace)
+- [Databricks CLI](https://docs.databricks.com/en/dev-tools/cli/install.html) v0.230+ configured (`databricks auth login`)
+- No local Python required — sample data is generated inside the workspace
 
 That's it. No external API keys, no separate vector DB, no third-party OCR service.
 
@@ -33,16 +33,16 @@ That's it. No external API keys, no separate vector DB, no third-party OCR servi
 git clone https://github.com/dgtriplett/utility-knowledge-lakehouse.git
 cd utility-knowledge-lakehouse
 
-# Generate the synthetic data locally
-pip install -r requirements.txt
-python -m src.sample_data.generate_data --out ./sample_data
-
-# Deploy everything to your workspace
+# Deploy everything to your workspace (no local Python setup required)
 databricks bundle deploy --target dev
 
-# Run the end-to-end pipeline (bootstrap -> ingest -> parse -> index -> agent)
+# Run the end-to-end pipeline (bootstrap -> sample data -> parse -> index -> agent)
 databricks bundle run end_to_end --target dev
 ```
+
+The pipeline generates synthetic sample data *inside* the workspace, so you
+don't need to install anything locally. If you'd rather preview the data on
+your laptop first, see the "Generating sample data locally" section below.
 
 When that job finishes (~25 min on a fresh workspace), you'll have:
 
@@ -136,6 +136,19 @@ The bundle reads a few variables from `databricks.yml`. Override them per-target
 | `embedding_endpoint` | `databricks-gte-large-en` | Embeddings for vector search |
 | `vs_endpoint_name` | `utility-knowledge-vs` | Vector Search endpoint |
 | `app_name` | `utility-knowledge-assistant` | Databricks App name |
+
+## Generating sample data locally (optional)
+
+If you want to inspect the synthetic corpus on your laptop before running
+the pipeline:
+
+```bash
+pip install reportlab
+python -m src.sample_data.generate_data --out ./sample_data
+```
+
+This produces the same PDFs and transcripts the in-workspace step produces.
+No other local setup is needed — the workspace pipeline does everything.
 
 ## Going beyond the sample
 
