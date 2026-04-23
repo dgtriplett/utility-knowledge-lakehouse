@@ -98,6 +98,14 @@ resources:
               agents_schema: ${var.agents_schema}
               agent_model_name: ${var.agent_model_name}
 
+        - task_key: deploy_app
+          depends_on: [{ task_key: deploy_agent }]
+          notebook_task:
+            notebook_path: ../src/app/deploy_app.py
+            base_parameters:
+              app_name: ${var.app_name}
+              agent_endpoint: agents_${var.catalog}-${var.agents_schema}-utility_assistant
+
       queue:
         enabled: true
       max_concurrent_runs: 1
