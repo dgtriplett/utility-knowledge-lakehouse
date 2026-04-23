@@ -1,0 +1,54 @@
+bundle:
+  name: utility-knowledge-lakehouse
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog where all resources land.
+    default: utility_knowledge
+  raw_schema:
+    description: Schema for raw landed data.
+    default: raw
+  curated_schema:
+    description: Schema for curated, governed data served to consumers.
+    default: curated
+  agents_schema:
+    description: Schema for registered agents.
+    default: agents
+  llm_endpoint:
+    description: Chat model endpoint used for extraction and the agent.
+    default: databricks-claude-sonnet-4-6
+  cheap_llm_endpoint:
+    description: Smaller, cheaper chat model used for high-volume extraction.
+    default: databricks-claude-haiku-4-5
+  embedding_endpoint:
+    description: Embedding model endpoint for Vector Search.
+    default: databricks-gte-large-en
+  vs_endpoint_name:
+    description: Vector Search endpoint name.
+    default: utility-knowledge-vs
+  app_name:
+    description: Databricks App name.
+    default: utility-knowledge-assistant
+  agent_model_name:
+    description: Fully qualified registered model name for the agent.
+    default: ${var.catalog}.${var.agents_schema}.utility_assistant
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: ${workspace.current_user.userName}
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/bundles/${bundle.name}/${bundle.target}
+    permissions:
+      - group_name: utility-knowledge-admins
+        level: CAN_MANAGE

@@ -1,0 +1,103 @@
+resources:
+  jobs:
+    end_to_end:
+      name: utility-knowledge-end-to-end
+      description: One-click pipeline — runs every layer in order.
+      tasks:
+        - task_key: bootstrap
+          notebook_task:
+            notebook_path: ../src/setup/00_bootstrap.py
+            base_parameters:
+              catalog: ${var.catalog}
+              raw_schema: ${var.raw_schema}
+              curated_schema: ${var.curated_schema}
+              agents_schema: ${var.agents_schema}
+
+        - task_key: upload_samples
+          depends_on: [{ task_key: bootstrap }]
+          notebook_task:
+            notebook_path: ../src/sample_data/upload_samples.py
+            base_parameters:
+              catalog: ${var.catalog}
+              raw_schema: ${var.raw_schema}
+
+        - task_key: parse_documents
+          depends_on: [{ task_key: upload_samples }]
+          notebook_task:
+            notebook_path: ../src/layer1_digitize/01_parse_documents.py
+            base_parameters:
+              catalog: ${var.catalog}
+              raw_schema: ${var.raw_schema}
+
+        - task_key: extract_fields
+          depends_on: [{ task_key: parse_documents }]
+          notebook_task:
+            notebook_path: ../src/layer1_digitize/02_extract_fields.py
+            base_parameters:
+              catalog: ${var.catalog}
+              raw_schema: ${var.raw_schema}
+              curated_schema: ${var.curated_schema}
+              llm_endpoint: ${var.cheap_llm_endpoint}
+
+        - task_key: consolidate
+          depends_on: [{ task_key: extract_fields }]
+          notebook_task:
+            notebook_path: ../src/layer2_consolidate/03_consolidate_sources.py
+            base_parameters:
+              catalog: ${var.catalog}
+              raw_schema: ${var.raw_schema}
+              curated_schema: ${var.curated_schema}
+
+        - task_key: chunk_documents
+          depends_on: [{ task_key: consolidate }]
+          notebook_task:
+            notebook_path: ../src/layer2_consolidate/04_chunk_documents.py
+            base_parameters:
+              catalog: ${var.catalog}
+              curated_schema: ${var.curated_schema}
+
+        - task_key: create_vector_index
+          depends_on: [{ task_key: chunk_documents }]
+          notebook_task:
+            notebook_path: ../src/layer2_consolidate/05_create_vector_index.py
+            base_parameters:
+              catalog: ${var.catalog}
+              curated_schema: ${var.curated_schema}
+              vs_endpoint_name: ${var.vs_endpoint_name}
+              embedding_endpoint: ${var.embedding_endpoint}
+
+        - task_key: process_debriefs
+          depends_on: [{ task_key: extract_fields }]
+          notebook_task:
+            notebook_path: ../src/layer3_implicit/06_process_debriefs.py
+            base_parameters:
+              catalog: ${var.catalog}
+              raw_schema: ${var.raw_schema}
+              curated_schema: ${var.curated_schema}
+              llm_endpoint: ${var.llm_endpoint}
+
+        - task_key: deploy_agent
+          depends_on:
+            - task_key: create_vector_index
+            - task_key: process_debriefs
+          notebook_task:
+            notebook_path: ../src/layer4_serve/deploy_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+              curated_schema: ${var.curated_schema}
+              agents_schema: ${var.agents_schema}
+              llm_endpoint: ${var.llm_endpoint}
+              agent_model_name: ${var.agent_model_name}
+
+        - task_key: evaluate
+          depends_on: [{ task_key: deploy_agent }]
+          notebook_task:
+            notebook_path: ../src/layer4_serve/eval_harness.py
+            base_parameters:
+              catalog: ${var.catalog}
+              agents_schema: ${var.agents_schema}
+              agent_model_name: ${var.agent_model_name}
+
+      queue:
+        enabled: true
+      max_concurrent_runs: 1

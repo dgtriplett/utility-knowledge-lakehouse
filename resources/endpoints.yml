@@ -1,0 +1,8 @@
+# Vector Search endpoint provisioning.
+# The serving endpoint for the agent is created by databricks.agents.deploy()
+# inside src/layer4_serve/deploy_agent.py — don't duplicate it here.
+resources:
+  vector_search_endpoints:
+    utility_knowledge_vs:
+      name: ${var.vs_endpoint_name}
+      endpoint_type: STANDARD

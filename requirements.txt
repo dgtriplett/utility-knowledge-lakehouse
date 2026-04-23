@@ -1,0 +1,7 @@
+# Local-only dependencies for generating synthetic sample data.
+# Everything that runs in the Databricks workspace pulls its deps from the
+# cluster / Model Serving / app requirements files.
+reportlab>=4.2.0
+faker>=30.0.0
+pydub>=0.25.1
+click>=8.1.7

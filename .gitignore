@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Databricks
+.databricks/
+.bundle/
+*.dbc
+
+# Generated sample data
+sample_data/
+!src/sample_data/
+
+# MLflow / local runs
+mlruns/
+mlartifacts/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets
+.env
+*.pem
+*.key
