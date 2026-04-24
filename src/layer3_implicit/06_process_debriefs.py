@@ -44,12 +44,14 @@ audio_volume = f"/Volumes/{catalog}/{raw}/raw_audio"
 
 # COMMAND ----------
 
+# Use binaryFile + decode to guarantee one row per file. The text reader's
+# `wholetext` option isn't reliably honored on all runtimes.
 transcripts = (
-    spark.read.option("wholetext", "true")
-    .text(f"{audio_volume}/debriefs_as_text/")
+    spark.read.format("binaryFile")
+    .load(f"{audio_volume}/debriefs_as_text/")
     .select(
-        F.col("_metadata.file_path").alias("source_path"),
-        F.col("value").alias("transcript"),
+        F.col("path").alias("source_path"),
+        F.decode(F.col("content"), "UTF-8").alias("transcript"),
     )
     .withColumn("debrief_id", F.sha2(F.col("source_path"), 256))
 )

@@ -59,18 +59,21 @@ print(summary)
 
 # COMMAND ----------
 
-def copy_tree(src: Path, dst: str) -> int:
-    count = 0
+def sync_tree(src: Path, dst: str) -> int:
+    """Wipe dst and copy everything under src. Avoids stale files across runs."""
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
     os.makedirs(dst, exist_ok=True)
+    count = 0
     for item in src.iterdir():
         shutil.copy(item, Path(dst) / item.name)
         count += 1
     return count
 
 
-onelines = copy_tree(tmp_out / "onelines", f"{docs_volume}/onelines")
-studies = copy_tree(tmp_out / "studies", f"{docs_volume}/studies")
-debriefs = copy_tree(tmp_out / "debriefs", f"{audio_volume}/debriefs_as_text")
+onelines = sync_tree(tmp_out / "onelines", f"{docs_volume}/onelines")
+studies = sync_tree(tmp_out / "studies", f"{docs_volume}/studies")
+debriefs = sync_tree(tmp_out / "debriefs", f"{audio_volume}/debriefs_as_text")
 
 print(f"Uploaded {onelines} one-lines, {studies} studies, {debriefs} debriefs.")
 print(f"Documents volume: {docs_volume}")
