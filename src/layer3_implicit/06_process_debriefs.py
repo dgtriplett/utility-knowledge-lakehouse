@@ -88,6 +88,9 @@ PROMPT = (
     "Transcript: "
 )
 
+# Escape single quotes for SQL literal embedding.
+prompt_sql = PROMPT.replace("'", "''")
+
 spark.sql(f"""
 CREATE OR REPLACE TABLE {catalog}.{curated}.sme_debriefs AS
 SELECT
@@ -96,7 +99,7 @@ SELECT
   transcript,
   ai_query(
     '{llm_endpoint}',
-    concat('{PROMPT}', transcript),
+    concat('{prompt_sql}', transcript),
     returnType => '{RETURN_TYPE}'
   ) AS structured,
   current_timestamp() AS processed_at
