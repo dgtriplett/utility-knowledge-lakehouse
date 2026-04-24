@@ -6,11 +6,10 @@
 # MAGIC and pulls out structured decisions, rationale, equipment mentions, and
 # MAGIC cross-references.
 # MAGIC
-# MAGIC For a real deployment you'd replace the text-load step with a Whisper
-# MAGIC transcription call (commented example included below) against audio
-# MAGIC files in the `raw_audio` Volume. The sample pipeline ships transcripts
-# MAGIC directly so you can demo the structuring step without a Whisper
-# MAGIC endpoint set up.
+# MAGIC In a real deployment you'd replace the text-load step with a Whisper
+# MAGIC transcription call (commented example below) against audio files in the
+# MAGIC `raw_audio` Volume. The sample pipeline ships transcripts directly so
+# MAGIC you can demo the structuring step without a Whisper endpoint.
 
 # COMMAND ----------
 
@@ -46,7 +45,8 @@ audio_volume = f"/Volumes/{catalog}/{raw}/raw_audio"
 # COMMAND ----------
 
 transcripts = (
-    spark.read.text(f"{audio_volume}/debriefs_as_text/", wholetext=True)
+    spark.read.option("wholetext", "true")
+    .text(f"{audio_volume}/debriefs_as_text/")
     .select(
         F.input_file_name().alias("source_path"),
         F.col("value").alias("transcript"),
@@ -55,75 +55,70 @@ transcripts = (
 )
 
 print(f"Loaded {transcripts.count()} debrief transcripts.")
+transcripts.createOrReplaceTempView("_debrief_transcripts")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Extract structure
+# MAGIC ## Extract structure with typed output
 # MAGIC
 # MAGIC We want decisions + rationale pairs, equipment mentions, failure modes,
-# MAGIC and cross-references — not a summary. Summaries throw away the thing
-# MAGIC that makes tacit knowledge valuable.
+# MAGIC and cross-references — not a summary. Using `ai_query` with a `returnType`
+# MAGIC gives us typed output directly, no JSON parsing needed.
 
 # COMMAND ----------
 
-structured = transcripts.withColumn(
-    "structured",
-    F.expr(
-        f"""
-        ai_query(
-          '{llm_endpoint}',
-          concat(
-            'You are extracting structured knowledge from a utility SME debrief ',
-            'transcript. Return JSON with keys: ',
-            '- topics (array of strings) ',
-            '- equipment_mentioned (array of strings — substations, breakers, relays, transformers) ',
-            '- decisions (array of objects with decision and rationale — the engineer''s ',
-            'explanation for *why* something is set or done the way it is) ',
-            '- failure_modes (array of strings — what went wrong, or could go wrong) ',
-            '- cross_references (array of strings — other procedures, studies, or documents ',
-            'the engineer points to) ',
-            '- handshake_relationships (array of strings — informal agreements not in any SOP). ',
-            'Be faithful to the transcript. Do not invent. ',
-            'Transcript: ',
-            transcript
-          ),
-          responseFormat => 'JSON_OBJECT'
-        )
-        """
-    ),
+RETURN_TYPE = (
+    "STRUCT<"
+    "topics ARRAY<STRING>, "
+    "equipment_mentioned ARRAY<STRING>, "
+    "decisions ARRAY<STRUCT<decision STRING, rationale STRING>>, "
+    "failure_modes ARRAY<STRING>, "
+    "cross_references ARRAY<STRING>, "
+    "handshake_relationships ARRAY<STRING>"
+    ">"
 )
 
-flattened = structured.select(
-    "debrief_id",
-    "source_path",
-    "transcript",
-    F.get_json_object("structured", "$.topics").alias("topics_json"),
-    F.get_json_object("structured", "$.equipment_mentioned").alias("equipment_json"),
-    F.get_json_object("structured", "$.decisions").alias("decisions_json"),
-    F.get_json_object("structured", "$.failure_modes").alias("failure_modes_json"),
-    F.get_json_object("structured", "$.cross_references").alias("cross_references_json"),
-    F.get_json_object("structured", "$.handshake_relationships").alias("handshakes_json"),
-    F.current_timestamp().alias("processed_at"),
+PROMPT = (
+    "You are extracting structured knowledge from a utility SME debrief "
+    "transcript. Fill in every field faithfully from the transcript. Do not "
+    "invent. Use empty arrays if a category does not appear. "
+    "Focus on decisions and their rationale — the engineer's explanation for "
+    "*why* something is set or done the way it is — not summaries. "
+    "Transcript: "
 )
 
-(
-    flattened.write.mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{catalog}.{curated}.sme_debriefs")
-)
+spark.sql(f"""
+CREATE OR REPLACE TABLE {catalog}.{curated}.sme_debriefs AS
+SELECT
+  debrief_id,
+  source_path,
+  transcript,
+  ai_query(
+    '{llm_endpoint}',
+    concat('{PROMPT}', transcript),
+    returnType => '{RETURN_TYPE}'
+  ) AS structured,
+  current_timestamp() AS processed_at
+FROM _debrief_transcripts
+""")
+
+count = spark.table(f"{catalog}.{curated}.sme_debriefs").count()
+print(f"Processed {count} debriefs into curated.sme_debriefs.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Also emit debriefs as retrievable chunks
+# MAGIC ## Emit debriefs as retrievable chunks
 # MAGIC
-# MAGIC So the agent can pull in SME context alongside document content using
-# MAGIC the same vector index.
+# MAGIC Append into the same `document_chunks` table so the agent's retriever
+# MAGIC surfaces document content and SME context in one call.
 
 # COMMAND ----------
 
 debrief_chunks = (
-    flattened.select(
+    spark.table(f"{catalog}.{curated}.sme_debriefs")
+    .select(
         F.concat(F.lit("debrief_"), F.col("debrief_id")).alias("chunk_id"),
         F.col("debrief_id").alias("doc_id"),
         F.col("source_path"),
@@ -133,11 +128,10 @@ debrief_chunks = (
         F.col("transcript").alias("chunk_text"),
         F.lit(None).cast("string").alias("substation_name"),
         F.lit(None).cast("double").alias("voltage_class_kv"),
-        F.lit(None).cast("array<string>").alias("equipment_ids"),
+        F.lit(None).cast("string").alias("equipment_ids"),
     )
 )
 
-# Append into the same chunks table the document pipeline writes to.
 (
     debrief_chunks.write.mode("append")
     .saveAsTable(f"{catalog}.{curated}.document_chunks")

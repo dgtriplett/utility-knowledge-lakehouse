@@ -57,7 +57,9 @@ resources:
               curated_schema: ${var.curated_schema}
 
         - task_key: create_vector_index
-          depends_on: [{ task_key: chunk_documents }]
+          depends_on:
+            - task_key: chunk_documents
+            - task_key: process_debriefs
           notebook_task:
             notebook_path: ../src/layer2_consolidate/05_create_vector_index.py
             base_parameters:
@@ -67,7 +69,7 @@ resources:
               embedding_endpoint: ${var.embedding_endpoint}
 
         - task_key: process_debriefs
-          depends_on: [{ task_key: extract_fields }]
+          depends_on: [{ task_key: chunk_documents }]
           notebook_task:
             notebook_path: ../src/layer3_implicit/06_process_debriefs.py
             base_parameters:
@@ -77,9 +79,7 @@ resources:
               llm_endpoint: ${var.llm_endpoint}
 
         - task_key: deploy_agent
-          depends_on:
-            - task_key: create_vector_index
-            - task_key: process_debriefs
+          depends_on: [{ task_key: create_vector_index }]
           notebook_task:
             notebook_path: ../src/layer4_serve/deploy_agent.py
             base_parameters:

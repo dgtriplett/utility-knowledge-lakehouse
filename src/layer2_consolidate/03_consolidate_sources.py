@@ -13,6 +13,7 @@
 # COMMAND ----------
 
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 dbutils.widgets.text("catalog", "utility_knowledge")
 dbutils.widgets.text("raw_schema", "raw")
@@ -45,7 +46,7 @@ pages = (
 deduped = (
     pages.withColumn(
         "canonical_path",
-        F.min("path").over(F.partitionBy("content_hash").orderBy("path")),
+        F.min("path").over(Window.partitionBy("content_hash").orderBy("path")),
     )
     .where(F.col("path") == F.col("canonical_path"))
     .drop("canonical_path")
@@ -64,17 +65,17 @@ documents = (
         how="left",
     )
     .select(
-        "p.doc_id",
+        F.col("p.doc_id").alias("doc_id"),
         F.col("p.path").alias("source_path"),
-        "p.source_kind",
-        "p.page_number",
-        "p.page_text",
-        "p.content_hash",
-        "f.substation_name",
-        "f.voltage_class_kv",
-        "f.equipment_ids",
-        "f.study_date",
-        "f.approving_engineer",
+        F.col("p.source_kind").alias("source_kind"),
+        F.col("p.page_number").alias("page_number"),
+        F.col("p.page_text").alias("page_text"),
+        F.col("p.content_hash").alias("content_hash"),
+        F.col("f.substation_name").alias("substation_name"),
+        F.col("f.voltage_class_kv").alias("voltage_class_kv"),
+        F.col("f.equipment_ids").alias("equipment_ids"),
+        F.col("f.study_date").alias("study_date"),
+        F.col("f.approving_engineer").alias("approving_engineer"),
         F.current_timestamp().alias("consolidated_at"),
     )
 )

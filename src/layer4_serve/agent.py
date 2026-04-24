@@ -1,32 +1,25 @@
 """Utility Knowledge Agent.
 
-A ChatAgent implementation that combines Vector Search retrieval with
-direct chat-model reasoning. Citations are preserved end-to-end: every
-retrieved chunk carries its source path, page number, and chunk id, and
-the agent returns them alongside the response so the app can render
-citation chips.
+A ChatAgent implementation that combines Vector Search retrieval with a
+chat-model call. Citations survive end-to-end: every retrieved chunk
+carries its source path, page number, and chunk id, and the agent
+returns them alongside the response via `custom_outputs` so the app
+can render citation chips.
 
-This file is logged as an MLflow pyfunc by `deploy_agent.py`.
+Config is read via `mlflow.models.ModelConfig` so the logged model
+picks up the endpoint and index names passed to `log_model(model_config=...)`.
 """
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from typing import Any
 
 import mlflow
 from mlflow.pyfunc import ChatAgent
-from mlflow.types.agent import (
-    ChatAgentChunk,
-    ChatAgentMessage,
-    ChatAgentResponse,
-    ChatContext,
-)
+from mlflow.types.agent import ChatAgentChunk, ChatAgentMessage, ChatAgentResponse, ChatContext
 
-
-RETRIEVER_TOOL = "search_utility_knowledge"
 
 SYSTEM_PROMPT = """You are a utility knowledge assistant. You help engineers,
 operators, and field crews find authoritative information about substations,
@@ -34,12 +27,11 @@ equipment, procedures, and historical decisions.
 
 Ground rules you must follow every time:
 
-1. For any factual claim about equipment, settings, procedures, or decisions,
-   call the `search_utility_knowledge` tool first. Do not answer from general
-   knowledge on utility-specific topics.
-2. Cite every claim with the chunk_id returned by the tool. Format each
-   citation as [doc:CHUNK_ID].
-3. If the search returns nothing relevant, say so plainly. Do not guess.
+1. Ground every factual claim about equipment, settings, procedures, or
+   decisions in the retrieved context provided below. Do not answer from
+   general knowledge on utility-specific topics.
+2. Cite every claim with the chunk_id. Format citations as [doc:CHUNK_ID].
+3. If retrieval returns nothing relevant, say so plainly. Do not guess.
 4. If a retrieved SME debrief contradicts a document, surface the
    contradiction — the SME context is usually the *reason* for an apparent
    discrepancy.
@@ -84,7 +76,6 @@ class UtilityKnowledgeAgent(ChatAgent):
         self._vs_client = None
         self._workspace_client = None
 
-    # Lazy init so MLflow model loading stays cheap.
     @property
     def vs_client(self):
         if self._vs_client is None:
@@ -118,19 +109,19 @@ class UtilityKnowledgeAgent(ChatAgent):
             num_results=self.k,
             query_type="HYBRID",
         )
-        data = result.get("result", {}).get("data_array", [])
-        # Column order matches the `columns` list above plus a trailing score.
+        data = result.get("result", {}).get("data_array", []) or []
         out: list[RetrievedChunk] = []
         for row in data:
+            # Column order is the `columns` list above, with the score appended.
             out.append(
                 RetrievedChunk(
                     chunk_id=row[0],
                     doc_id=row[1],
-                    source_path=row[2],
-                    source_kind=row[3],
-                    page_number=row[4],
-                    chunk_text=row[5],
-                    score=float(row[6]),
+                    source_path=row[2] or "",
+                    source_kind=row[3] or "",
+                    page_number=int(row[4]) if row[4] is not None else 0,
+                    chunk_text=row[5] or "",
+                    score=float(row[6]) if len(row) > 6 and row[6] is not None else 0.0,
                 )
             )
         return out
@@ -138,9 +129,10 @@ class UtilityKnowledgeAgent(ChatAgent):
     def _format_context(self, chunks: list[RetrievedChunk]) -> str:
         blocks = []
         for c in chunks:
+            label = os.path.basename(c.source_path) if c.source_path else c.chunk_id
             blocks.append(
-                f"[doc:{c.chunk_id}]  source={os.path.basename(c.source_path)}  "
-                f"kind={c.source_kind}  page={c.page_number}\n{c.chunk_text}"
+                f"[doc:{c.chunk_id}]  source={label}  kind={c.source_kind}  "
+                f"page={c.page_number}\n{c.chunk_text}"
             )
         return "\n\n---\n\n".join(blocks)
 
@@ -173,8 +165,8 @@ class UtilityKnowledgeAgent(ChatAgent):
             {
                 "role": "system",
                 "content": (
-                    "Retrieved context follows. Cite chunk_ids that you use "
-                    "with [doc:CHUNK_ID].\n\n" + context_block
+                    "Retrieved context follows. Cite chunk_ids that you use with "
+                    "[doc:CHUNK_ID].\n\n" + context_block
                 ),
             },
         ]
@@ -189,9 +181,7 @@ class UtilityKnowledgeAgent(ChatAgent):
                     name="utility_assistant",
                 )
             ],
-            custom_outputs={
-                "citations": [c.to_dict() for c in chunks],
-            },
+            custom_outputs={"citations": [c.to_dict() for c in chunks]},
         )
 
     def predict_stream(
@@ -200,22 +190,27 @@ class UtilityKnowledgeAgent(ChatAgent):
         context: ChatContext | None = None,
         custom_inputs: dict[str, Any] | None = None,
     ):
-        # Streaming omitted for brevity in the reference impl — the non-stream
-        # path is the contract the app depends on.
+        # Non-streaming fallback — the app contracts on predict.
         resp = self.predict(messages, context, custom_inputs)
         for msg in resp.messages:
             yield ChatAgentChunk(delta=msg)
 
 
-# Entrypoint that MLflow's pyfunc loader instantiates.
-def get_agent() -> UtilityKnowledgeAgent:
-    return UtilityKnowledgeAgent(
-        llm_endpoint=os.environ.get("LLM_ENDPOINT", "databricks-claude-sonnet-4-6"),
-        vs_endpoint_name=os.environ.get("VS_ENDPOINT_NAME", "utility-knowledge-vs"),
-        index_name=os.environ.get(
-            "VS_INDEX_NAME", "utility_knowledge.curated.document_chunks_idx"
-        ),
-    )
+# Read config passed via `mlflow.pyfunc.log_model(model_config=...)`.
+# `development_config` is the fallback used when the module is run outside a
+# logged model (e.g. during local iteration).
+_config = mlflow.models.ModelConfig(
+    development_config={
+        "LLM_ENDPOINT": "databricks-claude-sonnet-4-6",
+        "VS_ENDPOINT_NAME": "utility-knowledge-vs",
+        "VS_INDEX_NAME": "utility_knowledge.curated.document_chunks_idx",
+    }
+)
 
+AGENT = UtilityKnowledgeAgent(
+    llm_endpoint=_config.get("LLM_ENDPOINT"),
+    vs_endpoint_name=_config.get("VS_ENDPOINT_NAME"),
+    index_name=_config.get("VS_INDEX_NAME"),
+)
 
-mlflow.models.set_model(get_agent())
+mlflow.models.set_model(AGENT)

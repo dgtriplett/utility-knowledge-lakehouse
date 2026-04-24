@@ -2,15 +2,11 @@
 # MAGIC %md
 # MAGIC # Layer 2 — Chunk documents for retrieval
 # MAGIC
-# MAGIC Pages are a good retrieval grain for one-lines and debriefs; protection
-# MAGIC studies benefit from tighter chunks. This notebook does both: a short
-# MAGIC sliding-window chunk with overlap, while preserving the page anchor for
-# MAGIC citations.
+# MAGIC A sliding-window chunk with overlap, page anchor preserved for citations.
+# MAGIC Implemented in pure SQL so it runs anywhere, including serverless
+# MAGIC clusters that restrict Python UDFs.
 
 # COMMAND ----------
-
-from pyspark.sql import functions as F
-from pyspark.sql.types import ArrayType, StringType, IntegerType, StructField, StructType
 
 dbutils.widgets.text("catalog", "utility_knowledge")
 dbutils.widgets.text("curated_schema", "curated")
@@ -20,71 +16,55 @@ curated = dbutils.widgets.get("curated_schema")
 
 CHUNK_CHARS = 1200
 OVERLAP = 200
+STEP = CHUNK_CHARS - OVERLAP  # distance between successive chunk starts
 
 # COMMAND ----------
 
-chunk_schema = ArrayType(
-    StructType(
-        [
-            StructField("chunk_index", IntegerType()),
-            StructField("chunk_text", StringType()),
-        ]
-    )
+spark.sql(f"""
+CREATE OR REPLACE TABLE {catalog}.{curated}.document_chunks (
+  chunk_id STRING NOT NULL,
+  doc_id STRING,
+  source_path STRING,
+  source_kind STRING,
+  page_number INT,
+  chunk_index INT,
+  chunk_text STRING,
+  substation_name STRING,
+  voltage_class_kv DOUBLE,
+  equipment_ids STRING
 )
-
-
-def chunk(text: str):
-    if not text:
-        return []
-    out = []
-    i = 0
-    idx = 0
-    while i < len(text):
-        out.append((idx, text[i : i + CHUNK_CHARS]))
-        i += CHUNK_CHARS - OVERLAP
-        idx += 1
-    return out
-
-
-chunk_udf = F.udf(chunk, chunk_schema)
+TBLPROPERTIES (delta.enableChangeDataFeed = true)
+""")
 
 # COMMAND ----------
 
-chunked = (
-    spark.table(f"{catalog}.{curated}.documents")
-    .withColumn("chunks", chunk_udf("page_text"))
-    .withColumn("chunk", F.explode("chunks"))
-    .select(
-        F.concat_ws(
-            "_",
-            F.col("doc_id"),
-            F.col("page_number").cast("string"),
-            F.col("chunk.chunk_index").cast("string"),
-        ).alias("chunk_id"),
-        "doc_id",
-        "source_path",
-        "source_kind",
-        "page_number",
-        F.col("chunk.chunk_index").alias("chunk_index"),
-        F.col("chunk.chunk_text").alias("chunk_text"),
-        "substation_name",
-        "voltage_class_kv",
-        "equipment_ids",
-    )
+spark.sql(f"""
+INSERT OVERWRITE {catalog}.{curated}.document_chunks
+WITH sizes AS (
+  SELECT
+    *,
+    GREATEST(CAST(ceil(length(page_text) / {STEP}.0) AS INT), 1) AS n_chunks
+  FROM {catalog}.{curated}.documents
 )
-
-(
-    chunked.write.mode("overwrite").option("overwriteSchema", "true")
-    # Change Data Feed is required for Vector Search delta-sync.
-    .option("delta.enableChangeDataFeed", "true")
-    .saveAsTable(f"{catalog}.{curated}.document_chunks")
+SELECT
+  concat_ws('_', doc_id, CAST(page_number AS STRING), CAST(chunk_index AS STRING)) AS chunk_id,
+  doc_id,
+  source_path,
+  source_kind,
+  page_number,
+  chunk_index,
+  substring(page_text, chunk_index * {STEP} + 1, {CHUNK_CHARS}) AS chunk_text,
+  substation_name,
+  voltage_class_kv,
+  equipment_ids
+FROM (
+  SELECT
+    *,
+    explode(sequence(0, n_chunks - 1)) AS chunk_index
+  FROM sizes
 )
+WHERE length(substring(page_text, chunk_index * {STEP} + 1, {CHUNK_CHARS})) > 0
+""")
 
-# Turning on CDF after-the-fact is also supported — the option above handles
-# first-write and re-writes both.
-spark.sql(
-    f"ALTER TABLE {catalog}.{curated}.document_chunks "
-    "SET TBLPROPERTIES (delta.enableChangeDataFeed = true)"
-)
-
-print(f"Wrote {chunked.count()} chunks.")
+count = spark.table(f"{catalog}.{curated}.document_chunks").count()
+print(f"Wrote {count} chunks.")

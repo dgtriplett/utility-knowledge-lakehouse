@@ -7,7 +7,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -q "mlflow[databricks]>=3.0.0" databricks-agents databricks-vectorsearch
+# MAGIC %pip install -q "mlflow[databricks]>=3.0.0" databricks-agents databricks-vectorsearch databricks-sdk
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -16,6 +16,7 @@ import os
 
 import mlflow
 from databricks import agents
+from mlflow.tracking import MlflowClient
 
 dbutils.widgets.text("catalog", "utility_knowledge")
 dbutils.widgets.text("curated_schema", "curated")
@@ -40,20 +41,20 @@ index_name = f"{catalog}.{curated}.document_chunks_idx"
 mlflow.set_registry_uri("databricks-uc")
 
 # agent.py is a sibling of this notebook after the bundle syncs it.
-import os
-
-agent_file = os.path.join(os.path.dirname(os.path.abspath("__file__")), "agent.py")
-if not os.path.exists(agent_file):
-    # Notebook context — resolve against the notebook's own path.
-    nb_path = (
-        dbutils.notebook.entry_point.getDbutils()
-        .notebook()
-        .getContext()
-        .notebookPath()
-        .get()
-    )
-    agent_file = os.path.join("/Workspace", os.path.dirname(nb_path).lstrip("/"), "agent.py")
+nb_path = (
+    dbutils.notebook.entry_point.getDbutils()
+    .notebook()
+    .getContext()
+    .notebookPath()
+    .get()
+)
+agent_file = os.path.join("/Workspace", os.path.dirname(nb_path).lstrip("/"), "agent.py")
+assert os.path.exists(agent_file), (
+    f"Expected agent.py next to deploy_agent.py but {agent_file} does not exist"
+)
 print(f"Logging agent from: {agent_file}")
+
+# COMMAND ----------
 
 with mlflow.start_run(run_name="utility_assistant"):
     logged = mlflow.pyfunc.log_model(
@@ -61,7 +62,7 @@ with mlflow.start_run(run_name="utility_assistant"):
         artifact_path="agent",
         registered_model_name=model_name,
         pip_requirements=[
-            "mlflow>=3.0.0",
+            "mlflow[databricks]>=3.0.0",
             "databricks-sdk>=0.39.0",
             "databricks-vectorsearch>=0.40",
         ],
@@ -79,21 +80,15 @@ with mlflow.start_run(run_name="utility_assistant"):
 
 # COMMAND ----------
 
-from mlflow.tracking import MlflowClient
-
 client = MlflowClient(registry_uri="databricks-uc")
-latest = max(client.search_model_versions(f"name='{model_name}'"), key=lambda v: int(v.version))
+versions = client.search_model_versions(f"name='{model_name}'")
+latest = max(versions, key=lambda v: int(v.version))
 print(f"Deploying version {latest.version} of {model_name}...")
 
 deployment = agents.deploy(
     model_name=model_name,
     model_version=int(latest.version),
     scale_to_zero=True,
-    environment_vars={
-        "LLM_ENDPOINT": llm_endpoint,
-        "VS_ENDPOINT_NAME": vs_endpoint,
-        "VS_INDEX_NAME": index_name,
-    },
 )
 
 print(f"Endpoint: {deployment.endpoint_name}")

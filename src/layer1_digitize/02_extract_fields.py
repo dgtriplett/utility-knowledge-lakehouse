@@ -3,16 +3,13 @@
 # MAGIC # Layer 1 — Extract typed fields
 # MAGIC
 # MAGIC Takes the parsed elements and pulls out typed fields — equipment IDs,
-# MAGIC voltage classes, engineer names, dates — using `ai_extract` with a
-# MAGIC declared schema.
+# MAGIC voltage classes, engineer names, dates — using `ai_extract`.
 # MAGIC
-# MAGIC Low-confidence rows are routed to a `needs_review` table. Nothing flows
-# MAGIC to curated until an SME has seen it (or an automated confidence rule
-# MAGIC has approved it).
+# MAGIC Writes two tables:
+# MAGIC   - `document_fields` — typed, curated (passes confidence gate)
+# MAGIC   - `extraction_needs_review` — typed, failed the gate, awaits SME review
 
 # COMMAND ----------
-
-from pyspark.sql import functions as F
 
 dbutils.widgets.text("catalog", "utility_knowledge")
 dbutils.widgets.text("raw_schema", "raw")
@@ -22,93 +19,97 @@ dbutils.widgets.text("llm_endpoint", "databricks-claude-haiku-4-5")
 catalog = dbutils.widgets.get("catalog")
 raw = dbutils.widgets.get("raw_schema")
 curated = dbutils.widgets.get("curated_schema")
-llm_endpoint = dbutils.widgets.get("llm_endpoint")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Page-level text for extraction
+# MAGIC ## Page-level text, then `ai_extract`
 # MAGIC
-# MAGIC We extract from concatenated element text per page — most of the fields
-# MAGIC we care about appear on a single page, and the page anchor keeps
-# MAGIC citations tight.
+# MAGIC `ai_extract` returns VARIANT. We cast each field out with its expected type
+# MAGIC and materialize a typed Delta table in a single SQL statement.
 
 # COMMAND ----------
 
-pages = (
-    spark.table(f"{catalog}.{raw}.parsed_elements")
-    .groupBy("doc_id", "path", "source_kind", "page_number")
-    .agg(F.concat_ws("\n", F.collect_list("element_text")).alias("page_text"))
+spark.sql(f"""
+CREATE OR REPLACE TABLE {catalog}.{curated}.document_fields_typed AS
+WITH pages AS (
+  SELECT
+    doc_id,
+    path,
+    source_kind,
+    page_number,
+    concat_ws('\\n', collect_list(element_text)) AS page_text
+  FROM {catalog}.{raw}.parsed_elements
+  GROUP BY doc_id, path, source_kind, page_number
+),
+extracted AS (
+  SELECT
+    doc_id,
+    path,
+    source_kind,
+    page_number,
+    ai_extract(
+      page_text,
+      array(
+        'substation_name',
+        'voltage_class_kv',
+        'equipment_ids',
+        'study_date',
+        'approving_engineer',
+        'bus_arrangement',
+        'scada_rtu_model',
+        'last_thermal_inspection_year'
+      )
+    ) AS fields
+  FROM pages
 )
-
-# COMMAND ----------
-
-extracted = pages.withColumn(
-    "fields",
-    F.expr(
-        f"""
-        ai_extract(
-            page_text,
-            array(
-                'substation_name',
-                'voltage_class_kv',
-                'equipment_ids',
-                'study_date',
-                'approving_engineer',
-                'bus_arrangement',
-                'scada_rtu_model',
-                'last_thermal_inspection_year'
-            )
-        )
-        """
-    ),
-)
-
-extracted_flat = extracted.select(
-    "doc_id",
-    "path",
-    "source_kind",
-    "page_number",
-    F.col("fields.substation_name").alias("substation_name"),
-    F.col("fields.voltage_class_kv").cast("double").alias("voltage_class_kv"),
-    F.col("fields.equipment_ids").alias("equipment_ids"),
-    F.to_date(F.col("fields.study_date")).alias("study_date"),
-    F.col("fields.approving_engineer").alias("approving_engineer"),
-    F.col("fields.bus_arrangement").alias("bus_arrangement"),
-    F.col("fields.scada_rtu_model").alias("scada_rtu_model"),
-    F.col("fields.last_thermal_inspection_year").cast("int").alias("last_thermal_inspection_year"),
-    F.current_timestamp().alias("extracted_at"),
-    F.lit("ai_extract").alias("extraction_model_version"),
-)
+SELECT
+  doc_id,
+  path,
+  source_kind,
+  page_number,
+  fields.substation_name                              AS substation_name,
+  TRY_CAST(fields.voltage_class_kv AS DOUBLE)         AS voltage_class_kv,
+  fields.equipment_ids                                AS equipment_ids,
+  TRY_CAST(fields.study_date AS DATE)                 AS study_date,
+  fields.approving_engineer                           AS approving_engineer,
+  fields.bus_arrangement                              AS bus_arrangement,
+  fields.scada_rtu_model                              AS scada_rtu_model,
+  TRY_CAST(fields.last_thermal_inspection_year AS INT) AS last_thermal_inspection_year,
+  current_timestamp()                                 AS extracted_at,
+  'ai_extract'                                        AS extraction_model_version
+FROM extracted
+""")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Confidence gate
+# MAGIC ## Confidence gate → curated vs. needs_review
 # MAGIC
-# MAGIC A trivial heuristic: if the field is null on a page that clearly should
-# MAGIC contain it, send the row to `needs_review` instead of curated. Real
-# MAGIC deployments should back this with an LLM-as-judge call or a classifier.
+# MAGIC Trivial heuristic — protection study pages need a date, every page needs
+# MAGIC a substation name. Real deployments back this with an LLM-as-judge call.
 
 # COMMAND ----------
 
-needs_review = extracted_flat.where(
-    (F.col("source_kind") == "protection_study") & F.col("study_date").isNull()
-    | (F.col("substation_name").isNull())
-)
+FAIL_CONDITION = """
+  (source_kind = 'protection_study' AND study_date IS NULL)
+  OR substation_name IS NULL
+"""
 
-curated_rows = extracted_flat.exceptAll(needs_review)
+spark.sql(f"""
+CREATE OR REPLACE TABLE {catalog}.{curated}.extraction_needs_review AS
+SELECT * FROM {catalog}.{curated}.document_fields_typed
+WHERE {FAIL_CONDITION}
+""")
 
-(
-    needs_review.write.mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{catalog}.{curated}.extraction_needs_review")
-)
-(
-    curated_rows.write.mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{catalog}.{curated}.document_fields")
-)
+spark.sql(f"""
+CREATE OR REPLACE TABLE {catalog}.{curated}.document_fields AS
+SELECT * FROM {catalog}.{curated}.document_fields_typed
+WHERE NOT ({FAIL_CONDITION})
+""")
 
-print(
-    f"Curated: {curated_rows.count()} rows | "
-    f"Needs review: {needs_review.count()} rows"
-)
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{curated}.document_fields_typed")
+
+curated_count = spark.table(f"{catalog}.{curated}.document_fields").count()
+review_count = spark.table(f"{catalog}.{curated}.extraction_needs_review").count()
+print(f"Curated: {curated_count} rows | Needs review: {review_count} rows")
