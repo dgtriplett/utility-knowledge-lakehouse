@@ -33,7 +33,29 @@ databricks bundle validate --target dev
 databricks bundle deploy --target dev
 ```
 
-The first deploy syncs the `src/` tree (including `sample_data/`) into your workspace, provisions the Unity Catalog resources, the Vector Search endpoint, and the Databricks App skeleton.
+The first deploy syncs the `src/` tree into your workspace and creates the job. The catalog, schemas, volumes, Vector Search endpoint, and Databricks App are all provisioned by the pipeline itself — not at `bundle deploy` time. This keeps the deploy fast and avoids dependency ordering issues.
+
+### Overriding variables
+
+The bundle exposes a few knobs. Most common overrides:
+
+```bash
+# Use an existing catalog (required on FEVM sandboxes and any workspace
+# where you don't have CREATE CATALOG permission)
+databricks bundle deploy --target dev --var "catalog=my_existing_catalog"
+
+# Use non-default schema names (recommended when sharing a catalog)
+databricks bundle deploy --target dev \
+  --var "catalog=shared_catalog" \
+  --var "raw_schema=uk_raw" \
+  --var "curated_schema=uk_curated" \
+  --var "agents_schema=uk_agents"
+
+# Reuse an existing Vector Search endpoint (saves ~15min of provisioning)
+databricks bundle deploy --target dev --var "vs_endpoint_name=existing-vs-endpoint"
+```
+
+Variables are baked into the job at deploy time — overrides on `bundle run --var` do NOT propagate to notebook parameters. Always re-deploy when changing vars.
 
 ## 4. Run the end-to-end pipeline
 

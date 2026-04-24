@@ -1,5 +1,20 @@
 # Troubleshooting
 
+## FEVM sandbox: "Metastore storage root URL does not exist"
+
+FEVM sandboxes use Default Storage — `CREATE CATALOG foo` without an explicit `MANAGED LOCATION` fails. Workaround: override `catalog` to use the workspace's pre-created catalog (naming convention: `<workspace-name-with-underscores>_catalog`):
+
+```bash
+databricks bundle deploy --target dev \
+  --var "catalog=your_fevm_workspace_catalog" \
+  --var "raw_schema=uk_raw" \
+  --var "curated_schema=uk_curated" \
+  --var "agents_schema=uk_agents"
+```
+
+Namespacing the schemas (`uk_*` prefix) keeps you from colliding with other content in the shared catalog.
+
+
 ## `ai_parse_document` / `ai_extract` fails with "AI functions not enabled"
 
 Serverless compute needs to be enabled for your workspace and you need to be running on a cluster or DBR Serverless runtime that supports AI functions (DBR 16.x+). Fix: use Serverless SQL or a Serverless job cluster. The bundle jobs target Serverless by default.

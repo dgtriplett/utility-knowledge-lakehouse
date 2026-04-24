@@ -21,6 +21,7 @@ from databricks.sdk.service.apps import (
     AppDeployment,
     AppResource,
     AppResourceServingEndpoint,
+    AppResourceServingEndpointServingEndpointPermission,
 )
 
 dbutils.widgets.text("app_name", "utility-knowledge-assistant")
@@ -61,7 +62,7 @@ resources = [
         description="Serving endpoint hosting the utility knowledge agent.",
         serving_endpoint=AppResourceServingEndpoint(
             name=agent_endpoint,
-            permission="CAN_QUERY",
+            permission=AppResourceServingEndpointServingEndpointPermission.CAN_QUERY,
         ),
     )
 ]
