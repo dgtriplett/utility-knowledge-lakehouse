@@ -16,7 +16,10 @@ import os
 
 import mlflow
 from databricks import agents
-from mlflow.models.resources import DatabricksServingEndpoint, DatabricksVectorSearchIndex
+from mlflow.models.resources import (
+    DatabricksServingEndpoint,
+    DatabricksVectorSearchIndex,
+)
 from mlflow.tracking import MlflowClient
 
 dbutils.widgets.text("catalog", "utility_knowledge")

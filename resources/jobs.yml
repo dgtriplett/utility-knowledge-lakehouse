@@ -87,6 +87,7 @@ resources:
               curated_schema: ${var.curated_schema}
               agents_schema: ${var.agents_schema}
               llm_endpoint: ${var.llm_endpoint}
+              vs_endpoint_name: ${var.vs_endpoint_name}
               agent_model_name: ${var.agent_model_name}
 
         - task_key: evaluate
