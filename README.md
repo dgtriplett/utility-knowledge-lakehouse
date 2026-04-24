@@ -111,20 +111,6 @@ The pipeline and infrastructure are real and production-shaped. The **data** is 
 
 Replacing the synthetic corpus with your own is a two-line change: point `src/layer1_digitize/01_parse_documents.py` at your Volume. Everything downstream is schema-compatible.
 
-## Cost expectations
-
-Running the full quickstart on a fresh workspace, end-to-end:
-
-| Component | Approximate cost |
-| --- | --- |
-| Document parsing + extraction (50 docs, sample) | ~$2 |
-| Vector Search endpoint (8 hours idle + usage) | ~$5 |
-| Agent serving endpoint (scale-to-zero, light use) | <$1 |
-| Compute (serverless, ~25 min pipeline) | ~$3 |
-| **Total for a day of playing with it** | **~$10–15** |
-
-When you're done, `databricks bundle destroy --target dev` tears it all down cleanly.
-
 ## Configuration
 
 The bundle reads a few variables from `databricks.yml`. Override them per-target or via `--var`:
