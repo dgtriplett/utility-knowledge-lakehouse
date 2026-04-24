@@ -66,13 +66,25 @@ else:
 
 # COMMAND ----------
 
-# Wait for the first sync to finish so downstream steps see a populated index.
+# Wait for sync to finish — ONLINE_NO_PENDING_UPDATE is the terminal state.
+# Other ONLINE_* states (ONLINE_UPDATING_EMBEDDINGS, ONLINE_PIPELINE_FAILED,
+# etc.) still start with 'ONLINE' but mean the index hasn't caught up yet.
 idx = vsc.get_index(endpoint, index_name)
-for _ in range(80):
-    status = idx.describe().get("status", {}).get("detailed_state", "UNKNOWN")
-    print(f"index state: {status}")
-    if status.startswith("ONLINE"):
+last_state = None
+for _ in range(120):
+    desc = idx.describe().get("status", {})
+    state = desc.get("detailed_state", "UNKNOWN")
+    indexed = desc.get("indexed_row_count", 0)
+    ready = desc.get("ready", False)
+    if state != last_state:
+        print(f"index state: {state} | indexed_rows={indexed} | ready={ready}")
+        last_state = state
+    if state == "ONLINE_NO_PENDING_UPDATE" and ready:
         break
+    if "FAILED" in state:
+        raise RuntimeError(f"Index sync failed with state {state}")
     time.sleep(15)
+else:
+    print(f"Warning: index still in {last_state} after 30 min; continuing.")
 
 print(f"Vector Search index ready: {index_name}")

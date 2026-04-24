@@ -119,6 +119,13 @@ print(f"Processed {count} debriefs into curated.sme_debriefs.")
 
 # COMMAND ----------
 
+# Replace any existing debrief chunks so re-runs don't accumulate duplicates.
+# Document chunks (source_kind != 'debrief') are left alone since they come
+# from the chunking notebook.
+spark.sql(
+    f"DELETE FROM {catalog}.{curated}.document_chunks WHERE source_kind = 'debrief'"
+)
+
 debrief_chunks = (
     spark.table(f"{catalog}.{curated}.sme_debriefs")
     .select(

@@ -135,9 +135,13 @@ def _substations(n: int) -> list[Substation]:
 def _breakers_for(sub: Substation) -> list[Breaker]:
     rng = _rng(f"breakers-{sub.name}")
     manufacturers = ["ABB", "GE", "Siemens", "Eaton", "Mitsubishi", "Hitachi Energy"]
+    # First two slots are pinned to L (line) and B (bus) so equipment IDs like
+    # "138L-1" and "138B-2" are stable across runs — the sample questions
+    # reference 138L-1.
+    letters = ["L", "B"] + [rng.choice("LBCT") for _ in range(max(0, sub.num_breakers - 2))]
     out = []
     for i in range(sub.num_breakers):
-        eq_id = f"{int(sub.voltage_class_kv)}{rng.choice('LBCT')}-{i + 1}"
+        eq_id = f"{int(sub.voltage_class_kv)}{letters[i]}-{i + 1}"
         out.append(
             Breaker(
                 equipment_id=eq_id,
