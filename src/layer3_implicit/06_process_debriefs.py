@@ -48,7 +48,7 @@ transcripts = (
     spark.read.option("wholetext", "true")
     .text(f"{audio_volume}/debriefs_as_text/")
     .select(
-        F.input_file_name().alias("source_path"),
+        F.col("_metadata.file_path").alias("source_path"),
         F.col("value").alias("transcript"),
     )
     .withColumn("debrief_id", F.sha2(F.col("source_path"), 256))
