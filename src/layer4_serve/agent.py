@@ -13,6 +13,7 @@ picks up the endpoint and index names passed to `log_model(model_config=...)`.
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -187,6 +188,7 @@ class UtilityKnowledgeAgent(ChatAgent):
         return ChatAgentResponse(
             messages=[
                 ChatAgentMessage(
+                    id=str(uuid.uuid4()),
                     role="assistant",
                     content=answer,
                     name="utility_assistant",
