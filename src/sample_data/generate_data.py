@@ -77,14 +77,52 @@ def _engineer_name(rng: random.Random) -> str:
 
 
 def _substations(n: int) -> list[Substation]:
+    """Generate substations deterministically.
+
+    The first three are pinned to known names (Oak Ridge, Pine Hollow, Beaver Creek)
+    with a 138 kV voltage class so the app's sample questions ("bus arrangement
+    at Oak Ridge", "protection study for Pine Hollow", etc.) always resolve
+    against content that exists. The remainder are randomized.
+    """
     rng = _rng("substations")
-    out = []
-    for i in range(n):
+
+    # Pinned substations — sample questions in the app reference these by name.
+    pinned = [
+        Substation(
+            name="Oak Ridge",
+            region="NE",
+            voltage_class_kv=138.0,
+            num_breakers=8,
+            commissioning_year=1978,
+        ),
+        Substation(
+            name="Pine Hollow",
+            region="SE",
+            voltage_class_kv=138.0,
+            num_breakers=6,
+            commissioning_year=1985,
+        ),
+        Substation(
+            name="Beaver Creek",
+            region="MW",
+            voltage_class_kv=69.0,
+            num_breakers=5,
+            commissioning_year=1992,
+        ),
+    ]
+
+    pinned_names = {s.name for s in pinned}
+    out = list(pinned)
+    for i in range(max(0, n - len(pinned))):
+        # Skip suffixes that would collide with a pinned name.
         base = rng.choice(SUBSTATION_PREFIXES)
         suffix = rng.choice(["", " North", " South", " East", " West", f" {i}"])
+        name = f"{base}{suffix}".strip()
+        if name in pinned_names:
+            name = f"{base} {i + 100}"
         out.append(
             Substation(
-                name=f"{base}{suffix}".strip(),
+                name=name,
                 region=rng.choice(REGIONS),
                 voltage_class_kv=rng.choice(VOLTAGE_CLASSES),
                 num_breakers=rng.randint(4, 18),
@@ -358,10 +396,30 @@ def generate(out_dir: str | Path, n_substations: int = 15, n_debriefs: int = 20)
         _write_study(sub, breakers, study_path)
         manifest.append({"path": str(study_path), "type": "protection_study", "substation": sub.name})
 
+    # Pinned debriefs — sample questions in the app expect these to be
+    # retrievable. They reference breaker 138L-1 at Oak Ridge, which is
+    # guaranteed to exist because Oak Ridge is a pinned substation with a
+    # 138 kV voltage class (see _substations).
+    oak_ridge = next(s for s in subs if s.name == "Oak Ridge")
+    pinned_debriefs = [
+        (oak_ridge, "138L-1", "relay_coordination"),
+        (oak_ridge, "138L-2", "relay_firmware"),
+    ]
+    for i, (sub, eq, key) in enumerate(pinned_debriefs):
+        template = dict(DEBRIEF_TEMPLATES)[key]
+        debrief_path = out / "debriefs" / f"debrief_{i:03d}_{key}.txt"
+        _write_debrief(sub, eq, key, template, debrief_path)
+        manifest.append(
+            {"path": str(debrief_path), "type": "debrief", "substation": sub.name, "topic": key}
+        )
+
     rng = _rng("debriefs")
-    for i in range(n_debriefs):
+    for i in range(len(pinned_debriefs), n_debriefs):
         sub = rng.choice(subs)
-        eq = rng.choice([b.equipment_id for b in all_breakers if b.substation == sub.name])
+        eq_ids = [b.equipment_id for b in all_breakers if b.substation == sub.name]
+        if not eq_ids:
+            continue
+        eq = rng.choice(eq_ids)
         key, template = rng.choice(DEBRIEF_TEMPLATES)
         debrief_path = out / "debriefs" / f"debrief_{i:03d}_{key}.txt"
         _write_debrief(sub, eq, key, template, debrief_path)

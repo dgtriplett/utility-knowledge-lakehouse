@@ -53,17 +53,23 @@
       }
       .msg.user .bubble { background: var(--user-bg); color: white; }
       .msg.assistant .bubble { background: var(--assistant-bg); border: 1px solid var(--border); }
-      .citations { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+      .citations { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
       .citation {
         font-size: 11px;
-        padding: 2px 8px;
+        padding: 4px 10px;
         border-radius: 999px;
         background: var(--panel);
         border: 1px solid var(--border);
         color: var(--muted);
         cursor: pointer;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+        user-select: none;
       }
-      .citation:hover { color: var(--ink); border-color: var(--accent); }
+      .citation:hover {
+        color: var(--ink);
+        border-color: var(--accent);
+        background: rgba(47, 129, 247, 0.08);
+      }
       footer {
         border-top: 1px solid var(--border);
         padding: 16px 24px;
@@ -106,20 +112,103 @@
         cursor: pointer;
       }
       .suggestion:hover { color: var(--ink); border-color: var(--accent); }
+
+      /* Citation detail modal */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        padding: 24px;
+      }
+      .modal-overlay.open { display: flex; }
+      .modal {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        max-width: 720px;
+        width: 100%;
+        max-height: 85vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .modal-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .modal-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
+      .modal-close {
+        background: none;
+        border: none;
+        color: var(--muted);
+        font-size: 20px;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+      .modal-close:hover { color: var(--ink); }
+      .modal-meta {
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--border);
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 6px 16px;
+        font-size: 12px;
+      }
+      .modal-meta dt { color: var(--muted); }
+      .modal-meta dd { margin: 0; color: var(--ink); word-break: break-all; }
+      .modal-body {
+        padding: 16px 20px;
+        overflow-y: auto;
+        flex: 1;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        font-size: 14px;
+      }
+      .modal-footer {
+        padding: 12px 20px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .modal-footer a,
+      .modal-footer button {
+        font-size: 12px;
+        padding: 6px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--ink);
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .modal-footer a:hover,
+      .modal-footer button:hover {
+        border-color: var(--accent);
+      }
     </style>
   </head>
   <body>
     <header>
       <h1>Utility Knowledge Assistant</h1>
-      <p>Grounded answers from parsed documents, studies, and SME debriefs. Every claim cites its source.</p>
+      <p>Grounded answers from parsed documents, studies, and SME debriefs. Every claim cites its source — click a citation chip to view the snippet.</p>
     </header>
 
     <main id="chat"></main>
 
     <div class="suggestions" id="suggestions">
       <div class="suggestion">What is the bus arrangement at Oak Ridge substation?</div>
-      <div class="suggestion">Why was the time dial on breaker 138L-1 left unchanged?</div>
-      <div class="suggestion">Are there known firmware quirks on the relays?</div>
+      <div class="suggestion">Why was the time dial on breaker 138L-1 at Oak Ridge left unchanged?</div>
+      <div class="suggestion">Are there known firmware quirks on the relays at Oak Ridge?</div>
       <div class="suggestion">Summarize the protection study for Pine Hollow.</div>
     </div>
 
@@ -130,14 +219,91 @@
       </form>
     </footer>
 
+    <!-- Citation detail modal -->
+    <div id="modal-overlay" class="modal-overlay" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-header">
+          <h2 id="modal-title">Source detail</h2>
+          <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+        </div>
+        <dl class="modal-meta" id="modal-meta"></dl>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer" id="modal-footer"></div>
+      </div>
+    </div>
+
     <script>
       const chat = document.getElementById("chat");
       const form = document.getElementById("form");
       const input = document.getElementById("input");
       const send = document.getElementById("send");
       const suggestions = document.getElementById("suggestions");
+      const modalOverlay = document.getElementById("modal-overlay");
+      const modalClose = document.getElementById("modal-close");
+      const modalMeta = document.getElementById("modal-meta");
+      const modalBody = document.getElementById("modal-body");
+      const modalFooter = document.getElementById("modal-footer");
+      const modalTitle = document.getElementById("modal-title");
 
       const history = [];
+
+      function openCitation(c) {
+        const fname = (c.source_path || "").split("/").pop() || c.chunk_id;
+        modalTitle.textContent = fname;
+
+        modalMeta.innerHTML = "";
+        const rows = [
+          ["Chunk ID", c.chunk_id || ""],
+          ["Source kind", c.source_kind || ""],
+          ["Page", c.page_number != null ? String(c.page_number) : ""],
+          ["Score", c.score != null ? c.score.toFixed(3) : ""],
+          ["Source path", c.source_path || ""],
+        ];
+        for (const [k, v] of rows) {
+          if (!v) continue;
+          const dt = document.createElement("dt");
+          dt.textContent = k;
+          const dd = document.createElement("dd");
+          dd.textContent = v;
+          modalMeta.appendChild(dt);
+          modalMeta.appendChild(dd);
+        }
+
+        modalBody.textContent = c.snippet || "(no snippet available)";
+
+        modalFooter.innerHTML = "";
+        if (c.source_path) {
+          const openBtn = document.createElement("a");
+          const wsPath = c.source_path.replace(/^dbfs:/, "");
+          openBtn.href = `/#${wsPath}`;
+          openBtn.target = "_blank";
+          openBtn.rel = "noopener";
+          openBtn.textContent = "Open in workspace";
+          openBtn.title = "Opens the underlying file in a new tab. Requires workspace access.";
+          modalFooter.appendChild(openBtn);
+        }
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.textContent = "Copy snippet";
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(c.snippet || "").then(
+            () => { copyBtn.textContent = "Copied ✓"; setTimeout(() => copyBtn.textContent = "Copy snippet", 1500); },
+          );
+        };
+        modalFooter.appendChild(copyBtn);
+
+        modalOverlay.classList.add("open");
+        modalOverlay.setAttribute("aria-hidden", "false");
+      }
+
+      function closeModal() {
+        modalOverlay.classList.remove("open");
+        modalOverlay.setAttribute("aria-hidden", "true");
+      }
+
+      modalClose.addEventListener("click", closeModal);
+      modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
       function addMessage(role, content, citations) {
         const wrap = document.createElement("div");
@@ -153,8 +319,10 @@
             const chip = document.createElement("span");
             chip.className = "citation";
             const fname = (c.source_path || "").split("/").pop() || c.chunk_id;
-            chip.textContent = `${fname} · p${c.page_number}`;
-            chip.title = c.snippet || "";
+            const pageSuffix = c.page_number != null ? ` · p${c.page_number}` : "";
+            chip.textContent = `${fname}${pageSuffix}`;
+            chip.title = "Click to view snippet";
+            chip.addEventListener("click", () => openCitation(c));
             row.appendChild(chip);
           }
           bubble.appendChild(row);
