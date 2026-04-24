@@ -92,6 +92,16 @@ class UtilityKnowledgeAgent(ChatAgent):
             self._workspace_client = WorkspaceClient()
         return self._workspace_client
 
+    @property
+    def deploy_client(self):
+        # MLflow's deployment client handles dict→SDK type conversion cleanly
+        # and is the Databricks-recommended path for agent-to-endpoint calls.
+        if getattr(self, "_deploy_client", None) is None:
+            from mlflow.deployments import get_deploy_client
+
+            self._deploy_client = get_deploy_client("databricks")
+        return self._deploy_client
+
     def _retrieve(self, query: str) -> list[RetrievedChunk]:
         index = self.vs_client.get_index(
             endpoint_name=self.vs_endpoint_name, index_name=self.index_name
@@ -137,10 +147,11 @@ class UtilityKnowledgeAgent(ChatAgent):
         return "\n\n---\n\n".join(blocks)
 
     def _call_llm(self, messages: list[dict[str, Any]]) -> str:
-        response = self.workspace_client.serving_endpoints.query(
-            name=self.llm_endpoint, messages=messages
+        response = self.deploy_client.predict(
+            endpoint=self.llm_endpoint,
+            inputs={"messages": messages, "max_tokens": 1024},
         )
-        return response.choices[0].message.content
+        return response["choices"][0]["message"]["content"]
 
     def predict(
         self,
