@@ -16,6 +16,7 @@ import os
 
 import mlflow
 from databricks import agents
+from mlflow.models.resources import DatabricksServingEndpoint, DatabricksVectorSearchIndex
 from mlflow.tracking import MlflowClient
 
 dbutils.widgets.text("catalog", "utility_knowledge")
@@ -72,8 +73,8 @@ with mlflow.start_run(run_name="utility_assistant"):
             "VS_INDEX_NAME": index_name,
         },
         resources=[
-            {"type": "serving_endpoint", "name": llm_endpoint},
-            {"type": "vector_search_index", "name": index_name},
+            DatabricksServingEndpoint(endpoint_name=llm_endpoint),
+            DatabricksVectorSearchIndex(index_name=index_name),
         ],
     )
     print(f"Logged model: {logged.model_uri}")

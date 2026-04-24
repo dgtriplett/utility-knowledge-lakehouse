@@ -2,13 +2,16 @@
 # MAGIC %md
 # MAGIC # Layer 4 — Evaluation harness
 # MAGIC
-# MAGIC A small hand-labeled eval set + MLflow's built-in LLM-as-judge. The
-# MAGIC goal isn't a perfect score; it's a repeatable baseline you can diff
-# MAGIC against every time the corpus, prompts, or model changes.
+# MAGIC A small hand-labeled eval set + a substring-containment score. The goal
+# MAGIC isn't a perfect metric; it's a repeatable baseline you can diff across
+# MAGIC corpus, prompt, or model changes. To plug in MLflow's LLM-as-judge, add
+# MAGIC `extra_metrics=[mlflow.metrics.genai.answer_correctness()]` to the
+# MAGIC `mlflow.evaluate` call at the bottom — it needs a judge endpoint
+# MAGIC available in your workspace.
 
 # COMMAND ----------
 
-# MAGIC %pip install -q "mlflow[databricks]>=3.0.0" databricks-agents
+# MAGIC %pip install -q "mlflow[databricks]>=3.0.0" databricks-sdk
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -28,6 +31,7 @@ agents_schema = dbutils.widgets.get("agents_schema")
 model_name = dbutils.widgets.get("agent_model_name")
 
 endpoint_name = f"agents_{model_name.replace('.', '-')}"
+print(f"Querying endpoint: {endpoint_name}")
 
 # COMMAND ----------
 
@@ -58,9 +62,7 @@ eval_rows = [
         "expected_contains_any": ["don't have", "no relevant", "not in"],
     },
 ]
-
 eval_df = pd.DataFrame(eval_rows)
-display(eval_df)
 
 # COMMAND ----------
 
@@ -68,43 +70,47 @@ w = WorkspaceClient()
 
 
 def query_agent(request: str) -> str:
-    response = w.serving_endpoints.query(
-        name=endpoint_name,
-        messages=[{"role": "user", "content": request}],
-    )
-    return response.choices[0].message.content
+    try:
+        response = w.serving_endpoints.query(
+            name=endpoint_name,
+            messages=[{"role": "user", "content": request}],
+        )
+        return response.choices[0].message.content
+    except Exception as exc:
+        return f"<error: {exc}>"
 
 
 eval_df["response"] = eval_df["request"].apply(query_agent)
 
 # COMMAND ----------
 
-def simple_contains(row) -> float:
+def contains_any(row) -> float:
     resp = (row["response"] or "").lower()
     hits = sum(1 for t in row["expected_contains_any"] if t.lower() in resp)
     return float(hits > 0)
 
 
-eval_df["contains_score"] = eval_df.apply(simple_contains, axis=1)
+eval_df["contains_score"] = eval_df.apply(contains_any, axis=1)
+print(eval_df[["request", "contains_score"]])
+print(f"Mean contains_score: {eval_df['contains_score'].mean():.2f}")
 
-# LLM-as-judge for correctness + groundedness.
+# COMMAND ----------
+
 with mlflow.start_run(run_name="utility_assistant_eval"):
-    results = mlflow.evaluate(
-        data=eval_df,
-        predictions="response",
-        targets="expected_contains_any",
-        model_type="question-answering",
-        extra_metrics=[
-            mlflow.metrics.genai.answer_correctness(),
-            mlflow.metrics.genai.answer_relevance(),
-        ],
-    )
     mlflow.log_metric("contains_score_mean", eval_df["contains_score"].mean())
-    print(results.metrics)
+    mlflow.log_metric("n_eval_rows", len(eval_df))
 
 # COMMAND ----------
 
 # Persist the eval run as a Delta table so regressions can be diffed over time.
-spark.createDataFrame(eval_df).write.mode("append").option(
-    "mergeSchema", "true"
-).saveAsTable(f"{catalog}.{agents_schema}.eval_runs")
+(
+    spark.createDataFrame(
+        eval_df.assign(
+            expected_contains_any=eval_df["expected_contains_any"].apply(list)
+        )
+    )
+    .write.mode("append").option("mergeSchema", "true")
+    .saveAsTable(f"{catalog}.{agents_schema}.eval_runs")
+)
+
+print("Eval complete.")
