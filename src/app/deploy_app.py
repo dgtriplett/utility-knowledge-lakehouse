@@ -89,9 +89,11 @@ if deployment.status.message:
 # COMMAND ----------
 
 app = w.apps.get(app_name)
-state = app.compute_status.state if app.compute_status else None
-if state not in ("ACTIVE", "STARTING"):
-    print("Starting app compute...")
+state_str = str(app.compute_status.state).upper() if app.compute_status else ""
+if "ACTIVE" in state_str or "STARTING" in state_str:
+    print(f"App compute already running ({state_str}) — skipping start.")
+else:
+    print(f"Starting app compute (current state: {state_str or 'unknown'})...")
     w.apps.start_and_wait(name=app_name)
     app = w.apps.get(app_name)
 
