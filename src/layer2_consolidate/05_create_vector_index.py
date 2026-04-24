@@ -32,6 +32,30 @@ index_name = f"{catalog}.{curated}.document_chunks_idx"
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## Assemble the unified chunks table
+# MAGIC
+# MAGIC `document_chunks_docs` (from chunking) and `debrief_chunks` (from Layer 3)
+# MAGIC are unioned into `document_chunks` via a single CREATE OR REPLACE so the
+# MAGIC Delta Sync index sees a clean, full-rewrite source every run — avoiding
+# MAGIC the CDF confusion that a DELETE + append pattern causes.
+
+# COMMAND ----------
+
+spark.sql(f"""
+CREATE OR REPLACE TABLE {source_table}
+TBLPROPERTIES (delta.enableChangeDataFeed = true)
+AS
+SELECT * FROM {catalog}.{curated}.document_chunks_docs
+UNION ALL
+SELECT * FROM {catalog}.{curated}.debrief_chunks
+""")
+
+total = spark.table(source_table).count()
+print(f"document_chunks ready: {total} rows.")
+
+# COMMAND ----------
+
 vsc = VectorSearchClient(disable_notice=True)
 
 endpoints = [e["name"] for e in vsc.list_endpoints().get("endpoints", [])]
@@ -49,11 +73,9 @@ if endpoint not in endpoints:
 # COMMAND ----------
 
 existing = [i["name"] for i in vsc.list_indexes(endpoint).get("vector_indexes", [])]
-if index_name in existing:
-    print(f"Index {index_name} already exists. Triggering sync.")
-    vsc.get_index(endpoint, index_name).sync()
-else:
-    print(f"Creating index {index_name}...")
+
+
+def _create_index():
     vsc.create_delta_sync_index(
         endpoint_name=endpoint,
         source_table_name=source_table,
@@ -63,6 +85,25 @@ else:
         embedding_source_column="chunk_text",
         embedding_model_endpoint_name=embed_endpoint,
     )
+
+
+if index_name in existing:
+    idx = vsc.get_index(endpoint, index_name)
+    current_state = idx.describe().get("status", {}).get("detailed_state", "")
+    # If the previous sync failed or the table under the index was replaced,
+    # the cleanest path is to delete and recreate — trying to sync a failed
+    # index usually re-fails.
+    if "FAILED" in current_state or "OFFLINE" in current_state:
+        print(f"Index in state {current_state} — deleting and recreating.")
+        vsc.delete_index(endpoint, index_name)
+        time.sleep(10)
+        _create_index()
+    else:
+        print(f"Index {index_name} exists in state {current_state}. Triggering sync.")
+        idx.sync()
+else:
+    print(f"Creating index {index_name}...")
+    _create_index()
 
 # COMMAND ----------
 

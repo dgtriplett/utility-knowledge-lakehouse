@@ -119,12 +119,9 @@ print(f"Processed {count} debriefs into curated.sme_debriefs.")
 
 # COMMAND ----------
 
-# Replace any existing debrief chunks so re-runs don't accumulate duplicates.
-# Document chunks (source_kind != 'debrief') are left alone since they come
-# from the chunking notebook.
-spark.sql(
-    f"DELETE FROM {catalog}.{curated}.document_chunks WHERE source_kind = 'debrief'"
-)
+# Write debrief rows to their own table. `05_create_vector_index.py` unions
+# this with `document_chunks_docs` into the final `document_chunks` table
+# via a single `CREATE OR REPLACE`, which keeps the Delta Sync index happy.
 
 debrief_chunks = (
     spark.table(f"{catalog}.{curated}.sme_debriefs")
@@ -143,8 +140,8 @@ debrief_chunks = (
 )
 
 (
-    debrief_chunks.write.mode("append")
-    .saveAsTable(f"{catalog}.{curated}.document_chunks")
+    debrief_chunks.write.mode("overwrite").option("overwriteSchema", "true")
+    .saveAsTable(f"{catalog}.{curated}.debrief_chunks")
 )
 
-print(f"Appended {debrief_chunks.count()} debrief chunks to document_chunks.")
+print(f"Wrote {debrief_chunks.count()} debrief chunks to debrief_chunks.")
